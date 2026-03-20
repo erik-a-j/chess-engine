@@ -1,0 +1,12 @@
+generated
+build
+__pycache__
+.directory
+.vscode
+.venv
+a.out
+tmp.cpp
+tmp.py
+make.sh
+.clang*
+a.c
