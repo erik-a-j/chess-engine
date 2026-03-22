@@ -1,36 +1,47 @@
 #ifndef BITUTIL_H
 #define BITUTIL_H
 
-#include "macro.h"
 #if __has_include(<bit>)
 # include <bit>
 #endif
 #include <cstdint>
 
-#ifdef __cpp_lib_bitops
-# define bitutil_popcount std::popcount
-# define bitutil_lsb      std::countr_zero
-#else
-# define bitutil_popcount __builtin_popcountll
-# define bitutil_lsb      __builtin_ctzll
-#endif
-
 namespace chess::bitutil {
 
 constexpr int popcount(uint64_t v) noexcept
 {
-    return bitutil_popcount(v);
+#ifdef __cpp_lib_bitops
+    return std::popcount(v);
+#else
+    return __builtin_popcountll(v);
+#endif
 }
 
 constexpr int lsb(uint64_t v) noexcept
 {
-    return v ? bitutil_lsb(v) : 64;
+#ifdef __cpp_lib_bitops
+    return std::countr_zero(v);
+#else
+    return v ? __builtin_ctzll(v) : 64;
+#endif
+}
+
+constexpr int msb(uint64_t v) noexcept
+{
+#ifdef __cpp_lib_bitops
+    return std::countl_zero(v);
+#else
+    return v ? __builtin_clzll(v) : 64;
+#endif
+}
+
+constexpr int pop_lsb(uint64_t& v) noexcept
+{
+    const int i = lsb(v);
+    v &= v - 1;
+    return i;
 }
 
 }  // namespace chess::bitutil
-
-#undef bitutil_popcount
-#undef bitutil_lsb
-#include "macro.h"
 
 #endif /* #ifndef BITUTIL_H */

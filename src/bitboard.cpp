@@ -2,8 +2,7 @@
 
 #include <cstring>
 #include <iostream>
-
-#include "macro.h"
+#include <sstream>
 
 #include "bitboard.h"
 #include "bitutil.h"
@@ -11,52 +10,52 @@
 
 namespace chess {
 
-Magic rook_magics[64];
-Magic bishop_magics[64];
-uint64_t rook_table[102400];
-uint64_t bishop_table[5248];
+magic_t bishop_magics[64];
+magic_t rook_magics[64];
+uint64_t bishop_table[bishop_table_SIZE];
+uint64_t rook_table[rook_table_SIZE];
 
-static uint64_t rook_mask(square_idx_t sq)
+static uint64_t rook_mask(square_t sq)
 {
     uint64_t mask{0};
-    int r = BBrank(sq);
-    int f = BBfile(sq);
+    int r = sq.rank();
+    int f = sq.file();
 
     // clang-format off
-    for (int ff = f+1; ff<=6; ++ff) mask |= 1ULL << BBsq(ff, r);
-    for (int ff = f-1; ff>=1; --ff) mask |= 1ULL << BBsq(ff, r);
-    for (int rr = r+1; rr<=6; ++rr) mask |= 1ULL << BBsq(f, rr);
-    for (int rr = r-1; rr>=1; --rr) mask |= 1ULL << BBsq(f, rr);
+    for (int ff = f+1; ff<=6; ++ff) mask |= 1ULL << square_t{ff, r};
+    for (int ff = f-1; ff>=1; --ff) mask |= 1ULL << square_t{ff, r};
+    for (int rr = r+1; rr<=6; ++rr) mask |= 1ULL << square_t{f, rr};
+    for (int rr = r-1; rr>=1; --rr) mask |= 1ULL << square_t{f, rr};
     // clang-format on
 
     return mask;
 }
-static uint64_t bishop_mask(square_idx_t sq)
+static uint64_t bishop_mask(square_t sq)
 {
     uint64_t mask{0};
-    int r = BBrank(sq);
-    int f = BBfile(sq);
+    int r = sq.rank();
+    int f = sq.file();
     int rr, ff;
 
     // clang-format off
-    for (rr = r+1, ff = f+1; rr<=6 && ff<=6; ++rr, ++ff) mask |= 1ULL << BBsq(ff, rr);
-    for (rr = r+1, ff = f-1; rr<=6 && ff>=1; ++rr, --ff) mask |= 1ULL << BBsq(ff, rr);
-    for (rr = r-1, ff = f+1; rr>=1 && ff<=6; --rr, ++ff) mask |= 1ULL << BBsq(ff, rr);
-    for (rr = r-1, ff = f-1; rr>=1 && ff>=1; --rr, --ff) mask |= 1ULL << BBsq(ff, rr);
+    for (rr = r+1, ff = f+1; rr<=6 && ff<=6; ++rr, ++ff) mask |= 1ULL << square_t{ff, rr};
+    for (rr = r+1, ff = f-1; rr<=6 && ff>=1; ++rr, --ff) mask |= 1ULL << square_t{ff, rr};
+    for (rr = r-1, ff = f+1; rr>=1 && ff<=6; --rr, ++ff) mask |= 1ULL << square_t{ff, rr};
+    for (rr = r-1, ff = f-1; rr>=1 && ff>=1; --rr, --ff) mask |= 1ULL << square_t{ff, rr};
     // clang-format on
 
     return mask;
 }
-static uint64_t rook_attacks_slow(square_idx_t sq, uint64_t occ)
+static uint64_t rook_attacks_slow(square_t sq, uint64_t occ)
 {
     uint64_t atk{0};
-    int r = BBrank(sq);
-    int f = BBfile(sq);
+    int r = sq.rank();
+    int f = sq.file();
     int rr, ff;
 
 #define RAY(file, rank) \
-    { atk |= 1ULL << BBsq((file), (rank)); \
-      if (occ & (1ULL << BBsq((file), (rank)))) break; }
+    { atk |= 1ULL << square_t{(file), (rank)}; \
+      if (occ & (1ULL << square_t{(file), (rank)})) break; }
 
     // clang-format off
     for (ff = f+1; ff<=7; ++ff) RAY(ff, r)
@@ -68,16 +67,16 @@ static uint64_t rook_attacks_slow(square_idx_t sq, uint64_t occ)
 #undef RAY
     return atk;
 }
-static uint64_t bishop_attacks_slow(square_idx_t sq, uint64_t occ)
+static uint64_t bishop_attacks_slow(square_t sq, uint64_t occ)
 {
     uint64_t atk{0};
-    int r = BBrank(sq);
-    int f = BBfile(sq);
+    int r = sq.rank();
+    int f = sq.file();
     int rr, ff;
 
 #define DIAG(rcond, fcond, rstep, fstep) \
     for (rr = r+(rstep), ff = f+(fstep); rcond && fcond; rr+=(rstep), ff+=(fstep)) \
-    { atk |= 1ULL << BBsq(ff, rr); if (occ & (1ULL << BBsq(ff, rr))) break; }
+    { atk |= 1ULL << square_t{ff, rr}; if (occ & (1ULL << square_t{ff, rr})) break; }
 
     // clang-format off
     DIAG(rr<=7, ff<=7,  1,  1)
@@ -90,43 +89,63 @@ static uint64_t bishop_attacks_slow(square_idx_t sq, uint64_t occ)
     return atk;
 }
 
-static void find_magic(square_idx_t sq,
-                       uint64_t mask,
-                       uint64_t (*attacks_fn)(square_idx_t, uint64_t),
-                       Magic* out)
+static void find_magic(const piece_info_t& piece,
+                       uint64_t (*mask_fn)(square_t),
+                       uint64_t (*attacks_fn)(square_t, uint64_t),
+                       magic_t* out)
 {
+    static constexpr int seeds[] = {728, 10316, 55013, 32803, 12281, 15100, 16645, 255};
+    static uint64_t occ_list[4096];
+    static uint64_t atk_list[4096];
+    static uint64_t used_atk[4096];
+    static uint32_t used_epoch[4096];
+    std::memset(used_epoch, 0, sizeof(used_epoch));
+
+    uint64_t mask = mask_fn(piece.sq);
     int n = bitutil::popcount(mask);
     int size = 1 << n;
     int shift = 64 - n;
+    bool trying_good_magic = false;
+    uint64_t magic;
 
-    uint64_t* occ_list = new uint64_t[size];
-    uint64_t* atk_list = new uint64_t[size];
+    const good_magic_t& good_magic = good_magics[piece.type - piece_t::Bishop][piece.sq];
+
+    if (good_magic.magic)
+    {
+        trying_good_magic = true;
+        magic = good_magic.magic;
+        shift = 64 - good_magic.used_bits;
+    }
 
     {
         uint64_t sub = 0;
         for (int i = 0; i < size; ++i)
         {
             occ_list[i] = sub;
-            atk_list[i] = attacks_fn(sq, sub);
+            atk_list[i] = attacks_fn(piece.sq, sub);
             sub = (sub - mask) & mask;
         }
     }
 
-    uint64_t* used_atk = new uint64_t[size];
-    int* used_epoch = new int[size];
-    std::memset(used_epoch, -1, size * sizeof(int));
+    rng::SparseRNG srng(seeds[piece.sq.rank()]);
 
-    rng::SparseRNG srng(54321);
-    uint64_t magic;
-    for (int attempt = 0;; ++attempt)
+    for (uint32_t attempt = 1;; ++attempt)
     {
-        for (magic = 0; bitutil::popcount((mask * magic) >> 56) < 6;)
+        if (!trying_good_magic)
         {
-            magic = srng.generate();
+            for (magic = 0; bitutil::popcount((mask * magic) >> 56) < 6;)
+            {
+                magic = srng.generate();
+            }
         }
 
         bool ok = true;
-        int epoch = attempt;
+        uint32_t epoch = attempt;
+        if (epoch >= INT32_MAX)
+        {
+            std::memset(used_epoch, 0, size * sizeof(uint32_t));
+            epoch = 1;
+        }
 
         for (int i = 0; i < size; ++i)
         {
@@ -155,12 +174,14 @@ static void find_magic(square_idx_t sq,
             }
             break;
         }
+        else if (trying_good_magic)
+        {
+            std::cerr << std::hex << "Failed verifying good magic with mask: " << mask
+                      << ", magic: " << magic << std::dec << std::endl;
+            trying_good_magic = false;
+            shift = 64 - n;
+        }
     }
-
-    delete[] occ_list;
-    delete[] atk_list;
-    delete[] used_atk;
-    delete[] used_epoch;
 }
 
 void init_magics(void)
@@ -172,20 +193,35 @@ void init_magics(void)
     for (int sq = 0; sq < 64; sq++)
     {
         /* --- Rook --- */
-        uint64_t rmask = rook_mask(sq);
         rook_magics[sq].table = rook_table + rook_offset;
-        find_magic(sq, rmask, rook_attacks_slow, &rook_magics[sq]);
-        rook_offset += 1 << bitutil::popcount(rmask);
+        find_magic({sq, piece_t::Rook}, rook_mask, rook_attacks_slow, &rook_magics[sq]);
+        rook_offset += 1 << (64 - rook_magics[sq].shift);
 
         /* --- Bishop --- */
-        uint64_t bmask = bishop_mask(sq);
         bishop_magics[sq].table = bishop_table + bishop_offset;
-        find_magic(sq, bmask, bishop_attacks_slow, &bishop_magics[sq]);
-        bishop_offset += 1 << bitutil::popcount(bmask);
+        find_magic({sq, piece_t::Bishop}, bishop_mask, bishop_attacks_slow, &bishop_magics[sq]);
+        bishop_offset += 1 << (64 - bishop_magics[sq].shift);
     }
 
     std::cout << "Rook   table entries used: " << rook_offset << std::endl;
     std::cout << "Bishop table entries used: " << bishop_offset << std::endl;
+}
+
+std::string prettyBB(uint64_t bb, const char* occ, const char* empty)
+{
+    std::stringstream ss;
+    for (int rank = 7; rank >= 0; --rank)
+    {
+        ss << (rank + 1) << ' ';
+        for (int file = 0; file <= 7; ++file)
+        {
+            square_t sq{file, rank};
+            ss << ((bb >> sq) & 1 ? occ : empty) << ' ';
+        }
+        ss << '\n';
+    }
+    ss << "  a b c d e f g h\n";
+    return ss.str();
 }
 
 }  // namespace chess

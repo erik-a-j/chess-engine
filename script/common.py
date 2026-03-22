@@ -1,16 +1,14 @@
-from typing import NamedTuple, overload
+from typing import NamedTuple
 from dataclasses import dataclass, field
 from pathlib import Path
 from enum import Enum
 
 class FileId(Enum):
-    moves = 0
-    bitboard = 1
+    precomputed = 0
 
 class GenerateInfo(NamedTuple):
     source: list[Path]
     header: list[Path]
-    command: list[str]
 
 @dataclass
 class PpAndCode:

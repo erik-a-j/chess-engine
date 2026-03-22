@@ -1,35 +1,21 @@
 #ifndef BITBOARD_H
 #define BITBOARD_H
 
+#include <string>
+#include "constant.h"
 #include "types.h"
 
 namespace chess {
 
-struct Magic {
-    uint64_t* table;
-    uint64_t mask;
-    uint64_t magic;
-    int shift;
-};
-
-extern Magic rook_magics[64];
-extern Magic bishop_magics[64];
-extern uint64_t rook_table[102400];
-extern uint64_t bishop_table[5248];
+constexpr size_t bishop_table_SIZE = k::rb_table_size(piece_t::Bishop);
+constexpr size_t rook_table_SIZE = k::rb_table_size(piece_t::Rook);
+extern uint64_t bishop_table[bishop_table_SIZE];
+extern uint64_t rook_table[rook_table_SIZE];
+extern magic_t bishop_magics[64];
+extern magic_t rook_magics[64];
 
 void init_magics(void);
-
-inline uint64_t rook_attacks(square_idx_t sq, uint64_t occ)
-{
-    const Magic* m = &rook_magics[sq];
-    return m->table[((occ & m->mask) * m->magic) >> m->shift];
-}
-
-inline uint64_t bishop_attacks(square_idx_t sq, uint64_t occ)
-{
-    const Magic* m = &bishop_magics[sq];
-    return m->table[((occ & m->mask) * m->magic) >> m->shift];
-}
+std::string prettyBB(uint64_t bb, const char* occ = "■", const char* empty = "•");
 
 }  // namespace chess
 

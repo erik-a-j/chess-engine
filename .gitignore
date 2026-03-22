@@ -10,3 +10,4 @@ tmp.py
 make.sh
 .clang*
 a.c
+b.cpp
